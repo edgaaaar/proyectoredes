@@ -25,6 +25,7 @@ class HammingChannel:
             [0, 1, 1, 1, 0, 0, 1]
         ])
         
+        # Mapeo de Síndrome
         self.syndrome_map = {}
         for i in range(7):
             col = tuple(self.H[:, i])
@@ -67,13 +68,168 @@ class HammingChannel:
         return noisy_msg
 
 # =============================================================================
-# 2. INTERFAZ GRÁFICA (GUI)
+# CLASE DE ANIMACIÓN (VERSIÓN CORREGIDA Y RÁPIDA)
+# =============================================================================
+class AnimacionTablaHamming:
+    def __init__(self, parent, bits_recibidos, hamming_instance, error_pos_real):
+        self.top = tk.Toplevel(parent)
+        self.top.title("Proceso de Decodificación Hamming (7,4)")
+        self.top.geometry("750x450")
+        self.top.configure(bg="white")
+        
+        # Aseguramos que siempre haya 7 bits (rellenando con ceros si falta alguno)
+        self.bits = bits_recibidos
+        while len(self.bits) < 7:
+            self.bits.insert(0, 0)
+            
+        self.H = hamming_instance.H
+        self.error_pos_real = error_pos_real
+        self.labels = []
+        self.pasos = []
+        self.indice_paso = 0
+        
+        # --- GUI DE LA TABLA ---
+        frame_tabla = tk.Frame(self.top, bg="white", padx=20, pady=20)
+        frame_tabla.pack(expand=True, fill="both")
+        
+        headers = ["Etapa"] + [f"Bit {i}" for i in range(7)] + ["Resultado"]
+        for j, h in enumerate(headers):
+            tk.Label(frame_tabla, text=h, font=("Arial", 10, "bold"), 
+                     borderwidth=1, relief="solid", width=8, bg="#ecf0f1").grid(row=0, column=j, sticky="nsew", ipady=5)
+
+        self.row_names = ["Dato Recibido", "Prueba H-Fila 1", "Prueba H-Fila 2", "Prueba H-Fila 3", "Dato Corregido"]
+        
+        for i, nombre in enumerate(self.row_names):
+            fila_labels = []
+            tk.Label(frame_tabla, text=nombre, font=("Arial", 9, "bold"), 
+                     borderwidth=1, relief="solid", width=15, anchor="w", bg="#ecf0f1").grid(row=i+1, column=0, sticky="nsew", padx=1)
+            
+            # Celdas bits
+            for j in range(7):
+                lbl = tk.Label(frame_tabla, text="", font=("Consolas", 12), borderwidth=1, relief="solid", bg="white")
+                lbl.grid(row=i+1, column=j+1, sticky="nsew")
+                fila_labels.append(lbl)
+            
+            # Celda resultado
+            lbl_res = tk.Label(frame_tabla, text="", font=("Arial", 9, "bold"), borderwidth=1, relief="solid", bg="white", width=10)
+            lbl_res.grid(row=i+1, column=8, sticky="nsew")
+            fila_labels.append(lbl_res)
+            
+            self.labels.append(fila_labels)
+
+        self.lbl_status = tk.Label(self.top, text="Iniciando...", font=("Arial", 11), bg="white", fg="blue")
+        self.lbl_status.pack(pady=10)
+
+        # Construir y ejecutar
+        self.construir_pasos()
+        # Tiempo inicial corto (200ms)
+        self.top.after(200, self.ejecutar_siguiente_paso)
+
+    def construir_pasos(self):
+        # 1. Cargar bits (instantáneo visualmente)
+        for i, bit in enumerate(self.bits):
+            self.pasos.append(("set", 0, i, str(bit))) # Row 0 is Data
+        self.pasos.append(("text", "Analizando bits recibidos..."))
+
+        syndrome = []
+        colores = ["#d4e6f1", "#d5f5e3", "#fcf3cf"]
+        
+        # 2. Comprobaciones de Paridad
+        for row_idx in range(3): 
+            h_row = self.H[row_idx]
+            parity_sum = 0
+            
+            self.pasos.append(("text", f"Verificando Fila {row_idx+1} de Matriz H..."))
+            
+            for bit_idx, h_val in enumerate(h_row):
+                if h_val == 1:
+                    val_bit = self.bits[bit_idx]
+                    parity_sum += val_bit
+                    # Acción: Marcar celda
+                    self.pasos.append(("set", row_idx+1, bit_idx, str(val_bit)))
+                    self.pasos.append(("bg", row_idx+1, bit_idx, colores[row_idx]))
+            
+            res = parity_sum % 2
+            syndrome.append(res)
+            
+            color_res = "green" if res == 0 else "red"
+            txt_res = "OK (0)" if res == 0 else "MAL (1)"
+            self.pasos.append(("set_res", row_idx+1, txt_res, color_res))
+
+        # 3. Corrección
+        if np.any(syndrome):
+            self.pasos.append(("text", f"¡Error detectado! Síndrome: {syndrome}"))
+            
+            # Buscar columna
+            col_encontrada = -1
+            syndrome_tuple = tuple(syndrome)
+            for i in range(7):
+                if tuple(self.H[:, i]) == syndrome_tuple:
+                    col_encontrada = i
+                    break
+            
+            if col_encontrada != -1:
+                # Marcar columna verticalmente
+                for r in range(1, 4):
+                     if self.H[r-1][col_encontrada] == 1:
+                        self.pasos.append(("bg", r, col_encontrada, "#e74c3c")) # Rojo
+                
+                self.pasos.append(("text", f"Error en Bit {col_encontrada}. Corrigiendo..."))
+                
+                bits_corregidos = list(self.bits).copy()
+                bits_corregidos[col_encontrada] = 1 - bits_corregidos[col_encontrada]
+                
+                for i, bit in enumerate(bits_corregidos):
+                    bg = "#5dade2" if i == col_encontrada else "white"
+                    self.pasos.append(("set", 4, i, str(bit)))
+                    self.pasos.append(("bg", 4, i, bg))
+                
+                self.pasos.append(("set_res", 4, "REPARADO", "blue"))
+        else:
+            self.pasos.append(("text", "Transmisión Correcta. Sin errores."))
+            for i, bit in enumerate(self.bits):
+                self.pasos.append(("set", 4, i, str(bit)))
+            self.pasos.append(("set_res", 4, "INTACTO", "green"))
+
+    def ejecutar_siguiente_paso(self):
+        try:
+            if self.indice_paso >= len(self.pasos):
+                self.lbl_status.config(text="Proceso finalizado.", fg="black")
+                return
+
+            tipo = self.pasos[self.indice_paso][0]
+            data = self.pasos[self.indice_paso]
+            
+            # Mapeo de índices
+            # data[1] es fila (0..4) -> self.labels[0..4]
+            # data[2] es columna bit (0..6) -> self.labels[row][0..6]
+            
+            if tipo == "set":
+                self.labels[data[1]][data[2]].config(text=data[3])
+            elif tipo == "bg":
+                self.labels[data[1]][data[2]].config(bg=data[3])
+            elif tipo == "set_res":
+                # La celda de resultado es la última (-1)
+                self.labels[data[1]][-1].config(text=data[2], fg=data[3])
+            elif tipo == "text":
+                self.lbl_status.config(text=data[1])
+
+            self.indice_paso += 1
+            # VELOCIDAD: 60ms (Bastante rápido para que no aburra)
+            self.top.after(60, self.ejecutar_siguiente_paso)
+            
+        except Exception as e:
+            print(f"Error en animación: {e}")
+
+
+# =============================================================================
+# 3. INTERFAZ GRÁFICA PRINCIPAL (GUI)
 # =============================================================================
 class HammingApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Proyecto Final - Corrección Hamming (7,4)")
-        self.root.geometry("950x700") # Un poco más alto para el botón nuevo
+        self.root.geometry("950x700") 
         self.hamming = HammingChannel()
         self.selected_image_path = None
 
@@ -104,7 +260,7 @@ class HammingApp:
         self.setup_tab_texto()
 
     # -------------------------------------------------------------------------
-    # PESTAÑA 1: IMAGEN
+    # PESTAÑA 1: IMAGEN (Igual que antes)
     # -------------------------------------------------------------------------
     def setup_tab_imagen(self):
         frame = ttk.Frame(self.tab_imagen, padding=20)
@@ -201,7 +357,7 @@ class HammingApp:
             messagebox.showerror("Error", str(e))
 
     # -------------------------------------------------------------------------
-    # PESTAÑA 2: TEXTO (CON BOTÓN DE ANIMACIÓN)
+    # PESTAÑA 2: TEXTO (CON BOTÓN DE ANIMACIÓN ESTILO TABLA)
     # -------------------------------------------------------------------------
     def setup_tab_texto(self):
         frame = ttk.Frame(self.tab_texto, padding=20)
@@ -225,7 +381,7 @@ class HammingApp:
         self.txt_noise_slider.set(50) 
         self.txt_noise_slider.pack(side="left", padx=5)
 
-        ttk.Label(frame, text="Resultados de la transmisión:", style="Header.TLabel").pack(anchor="w")
+        ttk.Label(frame, text="Selecciona una fila para ver el proceso:", style="Header.TLabel").pack(anchor="w")
 
         columns = ("bloque", "codificado", "ruidoso", "estado")
         self.tree = ttk.Treeview(frame, columns=columns, show='headings', height=10)
@@ -245,10 +401,10 @@ class HammingApp:
         self.tree.pack(side="top", fill="both", expand=True, pady=5)
         scrollbar.pack(side="right", fill="y")
 
-        # --- AQUÍ ESTÁ EL BOTÓN NUEVO ---
-        btn_animar = tk.Button(frame, text="🎥 VER ANIMACIÓN DE REPARACIÓN", 
+        # --- BOTÓN PARA ABRIR LA ANIMACIÓN DE TABLA ---
+        btn_animar = tk.Button(frame, text="🎥 VER DETALLE TABLA HAMMING", 
                                bg="#e67e22", fg="white", font=("Segoe UI", 12, "bold"),
-                               command=self.abrir_animacion_desde_boton)
+                               command=self.abrir_animacion_tabla)
         btn_animar.pack(fill="x", pady=10)
 
     def run_text_simulation(self):
@@ -280,88 +436,35 @@ class HammingApp:
         for i in range(7):
             self.tree.tag_configure(f"error_{i}", foreground="red", background="#fadbd8")
 
-    # -------------------------------------------------------------------------
-    # ANIMACIÓN DE REPARACIÓN (TRIGGER DESDE BOTÓN)
-    # -------------------------------------------------------------------------
-    def abrir_animacion_desde_boton(self):
-        # 1. Verificar selección
+    def abrir_animacion_tabla(self):
         seleccion = self.tree.selection()
         if not seleccion:
-            messagebox.showwarning("Atención", "Primero selecciona una fila de la tabla (haz clic en ella).")
+            messagebox.showwarning("Atención", "Primero selecciona una fila de la tabla.")
             return
 
-        # 2. Obtener datos
         item = self.tree.item(seleccion[0])
         values = item['values']
         tags = item['tags']
 
-        cadena_recibida = list(str(values[2]))
+        # --- CORRECCIÓN CLAVE ---
+        # 1. Convertimos a string
+        val_str = str(values[2])
+        # 2. Rellenamos con ceros a la izquierda si faltan (ej: "101" -> "0000101")
+        val_str = val_str.zfill(7)
+        # 3. Convertimos a lista de enteros
+        cadena_recibida = [int(x) for x in val_str]
+        
         tag_info = tags[0] if tags else "ok"
+        error_pos_real = -1
         
-        # 3. Lanzar ventana
-        top = tk.Toplevel(self.root)
-        top.title("Escáner de Integridad de Datos")
-        top.geometry("600x350")
-        top.configure(bg="#2c3e50")
+        if "error" in str(tag_info):
+             try:
+                error_pos_real = int(str(tag_info).split("_")[1])
+             except:
+                pass
 
-        lbl_titulo = tk.Label(top, text="ANALIZANDO PAQUETE...", font=("Arial", 16, "bold"), fg="white", bg="#2c3e50")
-        lbl_titulo.pack(pady=20)
+        AnimacionTablaHamming(self.root, cadena_recibida, self.hamming, error_pos_real)
 
-        frame_bits = tk.Frame(top, bg="#2c3e50")
-        frame_bits.pack(pady=20)
-        
-        self.bit_labels = []
-        for bit in cadena_recibida:
-            l = tk.Label(frame_bits, text=bit, font=("Consolas", 24, "bold"), width=4, height=2, 
-                         bg="white", fg="black", relief="raised", bd=3)
-            l.pack(side="left", padx=5)
-            self.bit_labels.append(l)
-
-        lbl_log = tk.Label(top, text="Iniciando escaneo...", font=("Consolas", 12), fg="#f1c40f", bg="#2c3e50")
-        lbl_log.pack(pady=20)
-
-        # 4. Iniciar animación
-        if "ok" in str(tag_info):
-            self.animar_escaneo(top, 0, -1, lbl_log, lbl_titulo)
-        else:
-            try:
-                error_pos = int(str(tag_info).split("_")[1])
-                self.animar_escaneo(top, 0, error_pos, lbl_log, lbl_titulo)
-            except:
-                self.animar_escaneo(top, 0, -1, lbl_log, lbl_titulo)
-
-    def animar_escaneo(self, window, index, error_pos, lbl_log, lbl_titulo):
-        if index > 0:
-            prev_idx = index - 1
-            if prev_idx != error_pos:
-                self.bit_labels[prev_idx].config(bg="#27ae60", fg="white")
-
-        if index >= 7:
-            if error_pos == -1:
-                lbl_titulo.config(text="PAQUETE CORRECTO", fg="#27ae60")
-                lbl_log.config(text="Escaneo finalizado. Sin errores.", fg="#27ae60")
-            return
-
-        lbl_log.config(text=f"Verificando bit en posición {index}...", fg="#f1c40f")
-        self.bit_labels[index].config(bg="#f1c40f", fg="black")
-
-        if index == error_pos:
-            self.root.after(800, lambda: self.animar_error_encontrado(window, index, lbl_log, lbl_titulo))
-        else:
-            self.root.after(400, lambda: self.animar_escaneo(window, index + 1, error_pos, lbl_log, lbl_titulo))
-
-    def animar_error_encontrado(self, window, index, lbl_log, lbl_titulo):
-        self.bit_labels[index].config(bg="#e74c3c", fg="white")
-        lbl_titulo.config(text="¡ERROR DETECTADO!", fg="#e74c3c")
-        lbl_log.config(text=f"Corrupción de datos en bit {index}.", fg="#e74c3c")
-        self.root.after(1500, lambda: self.animar_correccion(window, index, lbl_log, lbl_titulo))
-
-    def animar_correccion(self, window, index, lbl_log, lbl_titulo):
-        valor_actual = self.bit_labels[index].cget("text")
-        nuevo_valor = "0" if valor_actual == "1" else "1"
-        self.bit_labels[index].config(text=nuevo_valor, bg="#3498db", fg="white")
-        lbl_titulo.config(text="REPARACIÓN EXITOSA", fg="#3498db")
-        lbl_log.config(text=f"Bit {index} invertido y corregido.", fg="#3498db")
 
 # =============================================================================
 # 3. LANZAMIENTO
